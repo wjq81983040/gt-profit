@@ -35,7 +35,7 @@ with st.form("add_form"):
     with col1:
         goods_name = st.text_input("商品名称（游戏名）")
         remark = st.text_input("备注（例如：FGO日服、栄冠クロス，可空）")
-        gt_price_jpy = st.number_input("GT售卖价（日元）", min_value=0.0, step=100)
+        gt_price_jpy = st.number_input("GT售卖价（日元）", min_value=0.0, step=100.0)
         cost_cny = st.number_input("淘宝进货垫付成本（人民币）", min_value=0.0, step=0.1)
     with col2:
         buyer_person = st.selectbox("进货垫付人", ["W", "D"])
@@ -69,6 +69,7 @@ with st.form("add_form"):
 这笔订单总利润：{total_profit_cny:.2f}元
 W分得：{w_profit:.2f}元｜D分得：{d_profit:.2f}元
 垫付人：{buyer_person}""")
+
 
 st.divider()
 
