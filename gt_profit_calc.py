@@ -1,35 +1,36 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-import os
 import plotly.express as px
 
-DATA_FILE = "gt_trade_data.csv"
+DATA_FILE = "gt_trade_records.csv"
 
-# 初始化数据
-if os.path.exists(DATA_FILE):
-    df = pd.read_csv(DATA_FILE, parse_dates=["date"])
-else:
+# 读取或者新建数据表
+try:
+    df = pd.read_csv(DATA_FILE)
+    # 核心修复：强制转换日期列
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+except FileNotFoundError:
     df = pd.DataFrame(columns=[
         "date", "goods_name", "remark", "gt_price_jpy", "cost_cny", "buyer_person",
         "after_fee_jpy", "receive_cny", "total_profit_cny",
         "W_profit", "D_profit"
     ])
 
-st.set_page_config(page_title="Gametrade收益计算器｜W&D对半分利润", layout="wide")
+st.set_page_config(page_title="Gametrade收益统计｜W&D对半分", layout="wide")
 st.title("Gametrade 账号交易收益统计")
 
-# ====================== 【网页端可修改参数区域】 ======================
+# ====================== 参数设置 ======================
 st.subheader("⚙️ 参数设置（实时生效）")
 col_param1, col_param2 = st.columns(2)
 with col_param1:
-    FEE_RATE = st.number_input("GT平台手续费(%)", min_value=0.0, max_value=30.0, value=8.8, step=0.1) / 100
+    FEE_RATE = st.number_input("GT平台手续费(%)", min_value=0.0, max_value=30.0, value=8.80, step=0.01) / 100
 with col_param2:
-    EXCHANGE_RATE = st.number_input("汇率：1日元 = ? 人民币", min_value=0.001, max_value=0.2, value=0.041, step=0.001)
-st.divider()
-# =====================================================================
+    EXCHANGE_RATE = st.number_input("汇率：1日元 = ?人民币", min_value=0.0001, value=0.04, step=0.0001)
 
-# ========== 录入表单 ==========
+st.divider()
+
+# ====================== 录入表单 ======================
 with st.form("add_form"):
     col1, col2 = st.columns(2)
     with col1:
@@ -43,7 +44,6 @@ with st.form("add_form"):
     submitted = st.form_submit_button("添加这条交易记录")
 
     if submitted:
-        # 核心计算
         after_fee_jpy = gt_price_jpy * (1 - FEE_RATE)
         receive_cny = after_fee_jpy * EXCHANGE_RATE
         total_profit_cny = receive_cny - cost_cny
@@ -51,7 +51,7 @@ with st.form("add_form"):
         d_profit = total_profit_cny * 0.5
 
         new_row = pd.DataFrame({
-            "date": [trade_date],
+            "date": [pd.to_datetime(trade_date)],
             "goods_name": [goods_name],
             "remark": [remark],
             "gt_price_jpy": [gt_price_jpy],
@@ -70,38 +70,38 @@ with st.form("add_form"):
 W分得：{w_profit:.2f}元｜D分得：{d_profit:.2f}元
 垫付人：{buyer_person}""")
 
-
 st.divider()
 
-# ========== 月份筛选 ==========
+# ====================== 交易记录查询 ======================
 st.subheader("📋 交易记录查询")
+# 生成年月字段
 df["year_month"] = df["date"].dt.strftime("%Y-%m")
 month_list = sorted(df["year_month"].unique(), reverse=True)
-select_month = st.selectbox("选择月份（全部则选全部）", ["全部"] + month_list)
+select_month = st.selectbox("选择月份", ["全部"] + month_list)
 
 if select_month != "全部":
     df_show = df[df["year_month"] == select_month].copy()
 else:
     df_show = df.copy()
 
-# 显示表格 + 删除行功能
 st.dataframe(df_show, use_container_width=True)
-row_to_del = st.number_input("输入要删除的行索引（录错的订单）", min_value=0, max_value=max(len(df)-1,0), value=0)
+
+row_to_del = st.number_input("输入要删除记录的行索引（录错订单）", min_value=0, max_value=max(len(df_show)-1,0), value=0)
 if st.button("删除该条记录"):
-    df = df.drop(row_to_del).reset_index(drop=True)
+    df = df.drop(df_show.index[row_to_del])
+    df = df.reset_index(drop=True)
     df.to_csv(DATA_FILE, index=False)
-    st.success("✅ 删除成功，页面刷新后生效")
+    st.rerun()
 
 # 导出CSV
 csv_data = df_show.to_csv(index=False, encoding="utf-8-sig")
-st.download_button(label="📥 导出当前筛选记录为CSV(Excel可打开)", data=csv_data, file_name="gt_trade_records.csv", mime="text/csv")
+st.download_button("📥 导出当前筛选记录CSV(Excel可打开)", data=csv_data, file_name="gt_trade_records.csv", mime="text/csv")
 
 st.divider()
 
-# ========== 每日收益折线图 ==========
+# ====================== 每日折线图 ======================
 st.subheader("📈 每日营收&利润趋势图")
 if not df_show.empty:
-    # 按日期聚合
     daily_summary = df_show.groupby("date").agg(
         daily_receive=("receive_cny", "sum"),
         daily_profit=("total_profit_cny", "sum")
@@ -112,11 +112,11 @@ if not df_show.empty:
     fig_line.for_each_trace(lambda t: t.update(name="每日到手营收" if t.name=="daily_receive" else "每日总利润"))
     st.plotly_chart(fig_line, use_container_width=True)
 else:
-    st.info("暂无数据，添加订单后会自动生成图表")
+    st.info("暂无订单数据，录入订单后自动生成图表")
 
 st.divider()
 
-# ========== 按游戏名称统计饼图 ==========
+# ====================== 游戏利润饼图 ======================
 st.subheader("🥧 各游戏总利润占比饼图")
 if not df_show.empty:
     game_summary = df_show.groupby("goods_name")["total_profit_cny"].sum().reset_index()
@@ -130,16 +130,14 @@ else:
 
 st.divider()
 
-# ========== 汇总统计 ==========
+# ====================== 汇总统计 ======================
 st.subheader("💰 汇总统计（当前筛选周期）")
-# 全局合计
 sum_total_receive = df_show["receive_cny"].sum()
 sum_total_cost = df_show["cost_cny"].sum()
 sum_total_profit = df_show["total_profit_cny"].sum()
 sum_w_profit = df_show["W_profit"].sum()
 sum_d_profit = df_show["D_profit"].sum()
 
-# 垫付成本拆分：W垫付总额 / D垫付总额
 sum_cost_w = df_show[df_show["buyer_person"] == "W"]["cost_cny"].sum()
 sum_cost_d = df_show[df_show["buyer_person"] == "D"]["cost_cny"].sum()
 
@@ -153,24 +151,20 @@ colA, colB = st.columns(2)
 with colA:
     st.markdown("### W")
     st.metric("W 总分得利润", f"{sum_w_profit:.2f} CNY")
-    st.metric("W 垫付的进货总成本", f"{sum_cost_w:.2f} CNY")
+    st.metric("W 垫付总本金", f"{sum_cost_w:.2f} CNY")
     w_final = sum_w_profit + sum_cost_w
-    st.info(f"""W 结算净额参考（回款后）
-= W利润 + 拿回自己垫付本金
-= {sum_w_profit:.2f} + {sum_cost_w:.2f} = {w_final:.2f}""")
+    st.info(f"W结算净额参考（回款后） = {w_final:.2f}")
 
 with colB:
     st.markdown("### D")
     st.metric("D 总分得利润", f"{sum_d_profit:.2f} CNY")
-    st.metric("D 垫付的进货总成本", f"{sum_cost_d:.2f} CNY")
+    st.metric("D 垫付总本金", f"{sum_cost_d:.2f} CNY")
     d_final = sum_d_profit + sum_cost_d
-    st.info(f"""D 结算净额参考（回款后）
-= D利润 + 拿回自己垫付本金
-= {sum_d_profit:.2f} + {sum_cost_d:.2f} = {d_final:.2f}""")
+    st.info(f"D结算净额参考（回款后） = {d_final:.2f}")
 
 st.divider()
 st.warning("""📌结算说明：
-1. 无论W还是D垫付进货，每一笔订单产生的净利润两人对半平分。
-2. 垫付的进货成本，结算时归还给垫付人。
-3. 【结算净额参考】= 个人分得利润 + 自己垫付的本金。
-4. 所有金额仅为内部记账对账使用。""")
+1. 无论W/D谁垫付进货，订单净利润两人对半平分。
+2. 垫付的进货本金，结算时返还给出钱垫付的人。
+3. 【结算净额参考】=分到的利润 + 自己垫付的本金。
+4. 所有金额仅作为内部记账对账使用。""")
