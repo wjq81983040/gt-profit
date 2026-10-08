@@ -1,21 +1,22 @@
 import streamlit as st
 import pandas as pd
+import os
 from datetime import datetime
 import plotly.express as px
 
 DATA_FILE = "gt_trade_records.csv"
 
-# 读取或者新建数据表
-try:
-    df = pd.read_csv(DATA_FILE)
-    # 核心修复：强制转换日期列
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-except FileNotFoundError:
-    df = pd.DataFrame(columns=[
-        "date", "goods_name", "remark", "gt_price_jpy", "cost_cny", "buyer_person",
-        "after_fee_jpy", "receive_cny", "total_profit_cny",
-        "W_profit", "D_profit"
-    ])
+# ========== 新增：每次启动自动清除旧csv，解决旧坏文件污染 ==========
+if os.path.exists(DATA_FILE):
+    os.remove(DATA_FILE)
+
+# 新建空白数据表
+df = pd.DataFrame(columns=[
+    "date", "goods_name", "remark", "gt_price_jpy", "cost_cny", "buyer_person",
+    "after_fee_jpy", "receive_cny", "total_profit_cny",
+    "W_profit", "D_profit"
+])
+df.to_csv(DATA_FILE, index=False)
 
 st.set_page_config(page_title="Gametrade收益统计｜W&D对半分", layout="wide")
 st.title("Gametrade 账号交易收益统计")
@@ -74,9 +75,15 @@ st.divider()
 
 # ====================== 交易记录查询 ======================
 st.subheader("📋 交易记录查询")
-# 生成年月字段
-df["year_month"] = df["date"].dt.strftime("%Y-%m")
+# 强制转换日期 + 容错保护
+df["date"] = pd.to_datetime(df["date"], errors="coerce")
+if pd.api.types.is_datetime64_any_dtype(df["date"]):
+    df["year_month"] = df["date"].dt.strftime("%Y-%m")
+else:
+    df["year_month"] = ""
+
 month_list = sorted(df["year_month"].unique(), reverse=True)
+month_list = [m for m in month_list if m != ""]
 select_month = st.selectbox("选择月份", ["全部"] + month_list)
 
 if select_month != "全部":
