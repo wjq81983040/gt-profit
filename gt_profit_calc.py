@@ -1,11 +1,26 @@
 import streamlit as st
 import pandas as pd
-import os
 from datetime import datetime
 import plotly.express as px
 
 DATA_FILE = "gt_trade_records.csv"
 
+# ========== 读取文件逻辑（修复空csv报错） ==========
+try:
+    df = pd.read_csv(DATA_FILE)
+except FileNotFoundError:
+    # 文件不存在，新建空表，定义全部列
+    df = pd.DataFrame(columns=[
+        "date", "goods_name", "remark", "gt_price_jpy", "cost_cny", "buyer_person",
+        "after_fee_jpy", "receive_cny", "total_profit_cny",
+        "W_profit", "D_profit"
+    ])
+
+# 只有date列存在才做日期转换
+if "date" in df.columns:
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+else:
+    df["date"] = pd.NaT
 
 st.set_page_config(page_title="Gametrade收益统计｜W&D对半分", layout="wide")
 st.title("Gametrade 账号交易收益统计")
@@ -64,8 +79,7 @@ st.divider()
 
 # ====================== 交易记录查询 ======================
 st.subheader("📋 交易记录查询")
-# 强制转换日期 + 容错保护
-df["date"] = pd.to_datetime(df["date"], errors="coerce")
+# 生成年月字段，增加容错保护
 if pd.api.types.is_datetime64_any_dtype(df["date"]):
     df["year_month"] = df["date"].dt.strftime("%Y-%m")
 else:
@@ -82,12 +96,16 @@ else:
 
 st.dataframe(df_show, use_container_width=True)
 
-row_to_del = st.number_input("输入要删除记录的行索引（录错订单）", min_value=0, max_value=max(len(df_show)-1,0), value=0)
-if st.button("删除该条记录"):
-    df = df.drop(df_show.index[row_to_del])
-    df = df.reset_index(drop=True)
-    df.to_csv(DATA_FILE, index=False)
-    st.rerun()
+# 删除行，做长度保护，防止空表报错
+if len(df_show) > 0:
+    row_to_del = st.number_input("输入要删除记录的行索引（录错订单）", min_value=0, max_value=len(df_show)-1, value=0)
+    if st.button("删除该条记录"):
+        df = df.drop(df_show.index[row_to_del])
+        df = df.reset_index(drop=True)
+        df.to_csv(DATA_FILE, index=False)
+        st.rerun()
+else:
+    st.info("暂无记录，无需删除")
 
 # 导出CSV
 csv_data = df_show.to_csv(index=False, encoding="utf-8-sig")
