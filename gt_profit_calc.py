@@ -1,184 +1,236 @@
 import streamlit as st
+import json
 import pandas as pd
-from datetime import datetime
-import plotly.express as px
+from io import BytesIO
 
-DATA_FILE = "gt_trade_records.csv"
+st.set_page_config(page_title="Gametrade利润计算器", layout="wide")
 
-# ========== 读取文件逻辑（修复空csv报错） ==========
-try:
-    df = pd.read_csv(DATA_FILE)
-except FileNotFoundError:
-    # 文件不存在，新建空表，定义全部列
-    df = pd.DataFrame(columns=[
-        "date", "goods_name", "remark", "gt_price_jpy", "cost_cny", "buyer_person",
-        "after_fee_jpy", "receive_cny", "total_profit_cny",
-        "W_profit", "D_profit"
-    ])
+def persist_all():
+    data = {
+        "exchange_rate": st.session_state["exchange_rate"],
+        "gt_fee_pct": st.session_state["gt_fee_pct"],
+        "withdraw_fixed_jpy": st.session_state["withdraw_fixed_jpy"],
+        "wise_fee_pct": st.session_state["wise_fee_pct"],
+        "ledger": st.session_state["ledger"]
+    }
+    st.components.v1.html(f"""
+    <script>
+    window.localStorage.setItem('gt_profit_data', JSON.stringify({json.dumps(data, ensure_ascii=False)}));
+    </script>
+    """, height=0)
 
-# 只有date列存在才做日期转换
-if "date" in df.columns:
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-else:
-    df["date"] = pd.NaT
+st.components.v1.html("""
+<script>
+const raw = window.localStorage.getItem('gt_profit_data');
+if(raw){
+    window.gt_cache = JSON.parse(raw);
+}
+</script>
+""", height=0)
 
-st.set_page_config(page_title="Gametrade收益统计｜W&D对半分", layout="wide")
-st.title("Gametrade 账号交易收益统计")
+if "init_flag" not in st.session_state:
+    st.session_state.init_flag = True
+    st.session_state["exchange_rate"] = 0.041
+    st.session_state["gt_fee_pct"] = 0.10
+    st.session_state["withdraw_fixed_jpy"] = 220
+    st.session_state["wise_fee_pct"] = 0.012
+    st.session_state["ledger"] = []
 
-# ====================== 参数设置 ======================
-st.subheader("⚙️ 参数设置（实时生效）")
-col_param1, col_param2 = st.columns(2)
-with col_param1:
-    FEE_RATE = st.number_input("GT平台手续费(%)", min_value=0.0, max_value=30.0, value=8.80, step=0.01) / 100
-with col_param2:
-    EXCHANGE_RATE = st.number_input("汇率：1日元 = ?人民币", min_value=0.0001, value=0.04, step=0.0001)
+# ========== 侧边栏：全局费率设置 ==========
+with st.sidebar:
+    st.header("⚙️ 全局参数（自动保存）")
+    exchange_rate = st.number_input("汇率 日元→人民币", value=st.session_state["exchange_rate"], min_value=0.001, max_value=0.2, step=0.0001, format="%.4f")
+    gt_fee_pct = st.number_input("Gametrade平台费率(%)", value=st.session_state["gt_fee_pct"]*100, min_value=0.0, max_value=30.0, step=0.1)/100
+    withdraw_fixed_jpy = st.number_input("GT提现固定手续费(日元)", value=int(st.session_state["withdraw_fixed_jpy"]), min_value=0, step=10)
+    wise_fee_pct = st.number_input("Wise兑换费率(%)", value=st.session_state["wise_fee_pct"]*100, min_value=0.0, max_value=10.0, step=0.1)/100
 
-st.divider()
+    st.session_state["exchange_rate"] = exchange_rate
+    st.session_state["gt_fee_pct"] = gt_fee_pct
+    st.session_state["withdraw_fixed_jpy"] = withdraw_fixed_jpy
+    st.session_state["wise_fee_pct"] = wise_fee_pct
+    persist_all()
 
-# ====================== 录入表单 ======================
-with st.form("add_form"):
-    col1, col2 = st.columns(2)
-    with col1:
-        goods_name = st.text_input("商品名称（游戏名）")
-        remark = st.text_input("备注（例如：FGO日服、栄冠クロス，可空）")
-        gt_price_jpy = st.number_input("GT售卖价（日元）", min_value=0.0, step=100.0)
-        cost_cny = st.number_input("淘宝进货垫付成本（人民币）", min_value=0.0, step=0.1)
-    with col2:
-        buyer_person = st.selectbox("进货垫付人", ["W", "D"])
-        trade_date = st.date_input("交易日期", value=datetime.now())
-    submitted = st.form_submit_button("添加这条交易记录")
-
-    if submitted:
-        after_fee_jpy = gt_price_jpy * (1 - FEE_RATE)
-        receive_cny = after_fee_jpy * EXCHANGE_RATE
-        total_profit_cny = receive_cny - cost_cny
-        w_profit = total_profit_cny * 0.5
-        d_profit = total_profit_cny * 0.5
-
-        new_row = pd.DataFrame({
-            "date": [pd.to_datetime(trade_date)],
-            "goods_name": [goods_name],
-            "remark": [remark],
-            "gt_price_jpy": [gt_price_jpy],
-            "cost_cny": [cost_cny],
-            "buyer_person": [buyer_person],
-            "after_fee_jpy": [after_fee_jpy],
-            "receive_cny": [receive_cny],
-            "total_profit_cny": [total_profit_cny],
-            "W_profit": [w_profit],
-            "D_profit": [d_profit]
-        })
-        df = pd.concat([df, new_row], ignore_index=True)
-        df.to_csv(DATA_FILE, index=False)
-        st.success(f"""✅ 记录保存成功
-这笔订单总利润：{total_profit_cny:.2f}元
-W分得：{w_profit:.2f}元｜D分得：{d_profit:.2f}元
-垫付人：{buyer_person}""")
-
-st.divider()
-
-# ====================== 交易记录查询 ======================
-st.subheader("📋 交易记录查询")
-# 生成年月字段，增加容错保护
-if pd.api.types.is_datetime64_any_dtype(df["date"]):
-    df["year_month"] = df["date"].dt.strftime("%Y-%m")
-else:
-    df["year_month"] = ""
-
-month_list = sorted(df["year_month"].unique(), reverse=True)
-month_list = [m for m in month_list if m != ""]
-select_month = st.selectbox("选择月份", ["全部"] + month_list)
-
-if select_month != "全部":
-    df_show = df[df["year_month"] == select_month].copy()
-else:
-    df_show = df.copy()
-
-st.dataframe(df_show, use_container_width=True)
-
-# 删除行，做长度保护，防止空表报错
-if len(df_show) > 0:
-    row_to_del = st.number_input("输入要删除记录的行索引（录错订单）", min_value=0, max_value=len(df_show)-1, value=0)
-    if st.button("删除该条记录"):
-        df = df.drop(df_show.index[row_to_del])
-        df = df.reset_index(drop=True)
-        df.to_csv(DATA_FILE, index=False)
+    st.divider()
+    if st.button("🗑️ 清空全部台账（不可恢复）"):
+        st.session_state["ledger"] = []
+        persist_all()
         st.rerun()
+
+# ========== 主页面 ==========
+st.title("📊 Gametrade 日元交易利润计算器【完整版｜可编辑+删除+筛选】")
+
+# -------- CSV导入模块 --------
+st.subheader("📥 导入CSV备份恢复台账")
+upload_file = st.file_uploader("上传导出的 gt_profit_ledger.csv", type="csv")
+if upload_file is not None:
+    import_df = pd.read_csv(upload_file, encoding="utf-8-sig")
+    import_rows = import_df.to_dict("records")
+    mode = st.radio("导入模式", ["追加到现有台账", "覆盖当前全部台账"], horizontal=True)
+    if st.button("✅ 确认导入"):
+        if mode == "覆盖当前全部台账":
+            st.session_state["ledger"] = import_rows
+        else:
+            st.session_state["ledger"].extend(import_rows)
+        persist_all()
+        st.success(f"✅ 导入成功，共 {len(import_rows)} 条订单")
+        st.rerun()
+
+st.divider()
+
+# -------- 新增订单 --------
+st.subheader("➕ 添加新订单")
+col1,col2,col3,col4 = st.columns(4)
+sell_jpy = col1.number_input("售出金额（日元）", min_value=0, step=100)
+cost_cny = col2.number_input("账号成本（人民币）", min_value=0.0, step=0.1)
+game_name = col3.text_input("游戏名称", value="")
+note = col4.text_input("备注", value="")
+
+if st.button("✅ 添加到台账") and sell_jpy>0:
+    gt_fee_jpy = sell_jpy * gt_fee_pct
+    after_gt = sell_jpy - gt_fee_jpy
+    after_withdraw = after_gt - withdraw_fixed_jpy
+    wise_fee_jpy = after_withdraw * wise_fee_pct
+    final_jpy = after_withdraw - wise_fee_jpy
+    final_cny = final_jpy * exchange_rate
+    profit_cny = final_cny - cost_cny
+    if cost_cny > 0:
+        rate = profit_cny / cost_cny
+        rate_str = f"{rate*100:.1f}%"
+    else:
+        rate_str = "无成本"
+
+    row = {
+        "游戏": game_name,
+        "备注": note,
+        "售价日元": sell_jpy,
+        "GT手续费日元": round(gt_fee_jpy,2),
+        "提现后日元": round(after_withdraw,2),
+        "Wise手续费日元": round(wise_fee_jpy,2),
+        "到手日元": round(final_jpy,2),
+        "到手人民币": round(final_cny,2),
+        "成本CNY": cost_cny,
+        "净利润CNY": round(profit_cny,2),
+        "毛利率": rate_str
+    }
+    st.session_state["ledger"].append(row)
+    persist_all()
+    st.success("✅ 订单已加入台账，自动保存！")
+    st.rerun()
+
+# -------- 台账 + 筛选 + 编辑/删除单行 --------
+st.divider()
+st.subheader("📋 交易台账")
+ledger = st.session_state["ledger"]
+
+if ledger:
+    df_all = pd.DataFrame(ledger).reset_index(drop=True)
+    df_all.insert(0, "序号", list(range(1, len(df_all)+1)))
+
+    # 游戏筛选
+    all_games = ["全部游戏"] + sorted(df_all["游戏"].unique().tolist())
+    select_game = st.selectbox("🔍 筛选游戏", all_games)
+    if select_game != "全部游戏":
+        df_filter = df_all[df_all["游戏"] == select_game].copy()
+    else:
+        df_filter = df_all.copy()
+
+    st.dataframe(df_filter, use_container_width=True, hide_index=True)
+
+    # 筛选后汇总统计
+    sum_sell = df_filter["售价日元"].sum()
+    sum_final_cny = df_filter["到手人民币"].sum()
+    sum_cost = df_filter["成本CNY"].sum()
+    sum_profit = df_filter["净利润CNY"].sum()
+    st.markdown(f"""
+    ### 📈 当前筛选结果汇总
+    - 订单数量：{len(df_filter)} 条
+    - 总售出日元：**{sum_sell:,.0f} JPY**
+    - 总到手人民币：**{sum_final_cny:,.2f} CNY**
+    - 总成本：**{sum_cost:,.2f} CNY**
+    - 总净利润：**{sum_profit:,.2f} CNY**
+    """)
+
+    # 导出全部台账
+    output = BytesIO()
+    df_all.drop(columns=["序号"]).to_csv(output, index=False, encoding="utf-8-sig")
+    st.download_button(
+        label="💾 导出【全部台账】CSV备份",
+        data=output.getvalue(),
+        file_name="gt_profit_ledger.csv",
+        mime="text/csv"
+    )
+
+    st.divider()
+    st.subheader("✏️ 编辑 / 🗑️ 删除单条记录")
+    edit_del_idx = st.number_input("输入要操作的【原始序号】", min_value=1, max_value=len(df_all), step=1)
+    real_idx = edit_del_idx - 1
+    target_row = st.session_state["ledger"][real_idx]
+
+    tab_edit, tab_del = st.tabs(["✏️ 编辑这条记录", "🗑️ 删除这条记录"])
+    with tab_edit:
+        e_game = st.text_input("游戏名称", value=target_row["游戏"])
+        e_note = st.text_input("备注", value=target_row["备注"])
+        e_sell = st.number_input("售出金额（日元）", value=int(target_row["售价日元"]), min_value=0, step=100)
+        e_cost = st.number_input("账号成本（人民币）", value=float(target_row["成本CNY"]), min_value=0.0, step=0.1)
+        if st.button("✅ 保存修改"):
+            # 重新计算
+            gt_fee_jpy = e_sell * gt_fee_pct
+            after_gt = e_sell - gt_fee_jpy
+            after_withdraw = after_gt - withdraw_fixed_jpy
+            wise_fee_jpy = after_withdraw * wise_fee_pct
+            final_jpy = after_withdraw - wise_fee_jpy
+            final_cny = final_jpy * exchange_rate
+            profit_cny = final_cny - e_cost
+            if e_cost > 0:
+                rate = profit_cny / e_cost
+                rate_str = f"{rate*100:.1f}%"
+            else:
+                rate_str = "无成本"
+            new_row = {
+                "游戏": e_game,
+                "备注": e_note,
+                "售价日元": e_sell,
+                "GT手续费日元": round(gt_fee_jpy,2),
+                "提现后日元": round(after_withdraw,2),
+                "Wise手续费日元": round(wise_fee_jpy,2),
+                "到手日元": round(final_jpy,2),
+                "到手人民币": round(final_cny,2),
+                "成本CNY": e_cost,
+                "净利润CNY": round(profit_cny,2),
+                "毛利率": rate_str
+            }
+            st.session_state["ledger"][real_idx] = new_row
+            persist_all()
+            st.success(f"✅ 序号 {edit_del_idx} 修改完成！")
+            st.rerun()
+
+    with tab_del:
+        st.warning(f"⚠️ 确认删除序号 {edit_del_idx} 的记录吗？删除后只能靠CSV备份恢复！")
+        if st.button("🗑️ 确认删除"):
+            st.session_state["ledger"].pop(real_idx)
+            persist_all()
+            st.success(f"✅ 序号 {edit_del_idx} 已删除！")
+            st.rerun()
+
 else:
-    st.info("暂无记录，无需删除")
+    st.info("暂无交易记录，添加订单或者上传CSV备份")
 
-# 导出CSV
-csv_data = df_show.to_csv(index=False, encoding="utf-8-sig")
-st.download_button("📥 导出当前筛选记录CSV(Excel可打开)", data=csv_data, file_name="gt_trade_records.csv", mime="text/csv")
-
+# -------- 快速试算 --------
 st.divider()
+st.subheader("⚡ 快速试算（临时，不存入台账）")
+test_jpy = st.number_input("试算：售价日元", min_value=0, step=100, key="test")
+if test_jpy>0:
+    gt_fee_jpy = test_jpy * gt_fee_pct
+    after_gt = test_jpy - gt_fee_jpy
+    after_withdraw = after_gt - withdraw_fixed_jpy
+    wise_fee_jpy = after_withdraw * wise_fee_pct
+    final_jpy = after_withdraw - wise_fee_jpy
+    final_cny = final_jpy * exchange_rate
+    st.write(f"""
+    - GT手续费：{gt_fee_jpy:.0f} JPY
+    - 扣提现费后：{after_withdraw:.0f} JPY
+    - Wise手续费：{wise_fee_jpy:.0f} JPY
+    - 最终到手日元：{final_jpy:.0f} JPY
+    - 折合人民币：**{final_cny:.2f} CNY**
+    """)
 
-# ====================== 每日折线图 ======================
-st.subheader("📈 每日营收&利润趋势图")
-if not df_show.empty:
-    daily_summary = df_show.groupby("date").agg(
-        daily_receive=("receive_cny", "sum"),
-        daily_profit=("total_profit_cny", "sum")
-    ).reset_index()
-    fig_line = px.line(daily_summary, x="date", y=["daily_receive","daily_profit"],
-                  labels={"value":"金额(CNY)", "date":"日期", "variable":"项目"},
-                  title="每日到手营收 & 每日总利润")
-    fig_line.for_each_trace(lambda t: t.update(name="每日到手营收" if t.name=="daily_receive" else "每日总利润"))
-    st.plotly_chart(fig_line, use_container_width=True)
-else:
-    st.info("暂无订单数据，录入订单后自动生成图表")
-
-st.divider()
-
-# ====================== 游戏利润饼图 ======================
-st.subheader("🥧 各游戏总利润占比饼图")
-if not df_show.empty:
-    game_summary = df_show.groupby("goods_name")["total_profit_cny"].sum().reset_index()
-    fig_pie = px.pie(game_summary, values="total_profit_cny", names="goods_name",
-                     title="各游戏利润占比",
-                     labels={"total_profit_cny":"总利润(CNY)", "goods_name":"游戏名称"})
-    fig_pie.update_traces(texttemplate='%{percent:.1%}<br>%{value:.2f}元', textposition='inside')
-    st.plotly_chart(fig_pie, use_container_width=True)
-else:
-    st.info("暂无订单数据，录入订单后自动生成饼图")
-
-st.divider()
-
-# ====================== 汇总统计 ======================
-st.subheader("💰 汇总统计（当前筛选周期）")
-sum_total_receive = df_show["receive_cny"].sum()
-sum_total_cost = df_show["cost_cny"].sum()
-sum_total_profit = df_show["total_profit_cny"].sum()
-sum_w_profit = df_show["W_profit"].sum()
-sum_d_profit = df_show["D_profit"].sum()
-
-sum_cost_w = df_show[df_show["buyer_person"] == "W"]["cost_cny"].sum()
-sum_cost_d = df_show[df_show["buyer_person"] == "D"]["cost_cny"].sum()
-
-col1, col2, col3 = st.columns(3)
-col1.metric("总到手营收(人民币)", f"{sum_total_receive:.2f}")
-col2.metric("总垫付进货成本", f"{sum_total_cost:.2f}")
-col3.metric("全部订单总利润", f"{sum_total_profit:.2f}")
-
-st.markdown("---")
-colA, colB = st.columns(2)
-with colA:
-    st.markdown("### W")
-    st.metric("W 总分得利润", f"{sum_w_profit:.2f} CNY")
-    st.metric("W 垫付总本金", f"{sum_cost_w:.2f} CNY")
-    w_final = sum_w_profit + sum_cost_w
-    st.info(f"W结算净额参考（回款后） = {w_final:.2f}")
-
-with colB:
-    st.markdown("### D")
-    st.metric("D 总分得利润", f"{sum_d_profit:.2f} CNY")
-    st.metric("D 垫付总本金", f"{sum_cost_d:.2f} CNY")
-    d_final = sum_d_profit + sum_cost_d
-    st.info(f"D结算净额参考（回款后） = {d_final:.2f}")
-
-st.divider()
-st.warning("""📌结算说明：
-1. 无论W/D谁垫付进货，订单净利润两人对半平分。
-2. 垫付的进货本金，结算时返还给出钱垫付的人。
-3. 【结算净额参考】=分到的利润 + 自己垫付的本金。
-4. 所有金额仅作为内部记账对账使用。""")
