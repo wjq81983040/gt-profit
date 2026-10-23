@@ -2,8 +2,9 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 from io import BytesIO
+from webdav3.client import Client
 
-st.set_page_config(page_title="Gametrade双人台账｜内存共享版", layout="wide")
+st.set_page_config(page_title="Gametrade双人台账｜内存共享+自动备份版", layout="wide")
 
 # 北京时间
 def get_beijing_now():
@@ -11,12 +12,59 @@ def get_beijing_now():
     bj_now = utc_now + timedelta(hours=8)
     return bj_now
 
-# ========= 全局共享台账（核心：cache_resource，全用户共用同一份数据，就是你之前老版本的同步逻辑） =========
+# ========= WebDav坚果云备份配置 =========
+@st.cache_resource
+def get_webdav_client():
+    options = {
+        'webdav_hostname': st.secrets["WEBDAV_URL"],
+        'webdav_login': st.secrets["WEBDAV_USER"],
+        'webdav_password': st.secrets["WEBDAV_PASS"],
+    }
+    return Client(options)
+
+# 全局共享台账（核心，双人同链接共享内存）
 @st.cache_resource
 def get_shared_ledger():
     return []
 
+@st.cache_resource
+def get_backup_time_record():
+    # 记录上次自动备份的北京时间
+    return {"last_backup": None}
+
 ledger = get_shared_ledger()
+backup_record = get_backup_time_record()
+
+# 自动备份函数
+def auto_backup():
+    if len(ledger) == 0:
+        return False, "台账为空，跳过备份"
+    df = pd.DataFrame(ledger)
+    bio = BytesIO()
+    df.to_csv(bio, index=False, encoding="utf-8-sig")
+    bio.seek(0)
+    bj_now = get_beijing_now()
+    fname = f"gt_backup_{bj_now.strftime('%Y%m%d_%H%M%S')}.csv"
+    try:
+        client = get_webdav_client()
+        client.upload_to(bio, fname)
+        backup_record["last_backup"] = bj_now
+        return True, f"备份成功，文件名：{fname}"
+    except Exception as e:
+        return False, f"备份失败：{str(e)}"
+
+# 页面加载时判断是否需要自动备份
+bj_now = get_beijing_now()
+if backup_record["last_backup"] is None:
+    pass
+else:
+    diff = bj_now - backup_record["last_backup"]
+    if diff.total_seconds() >= 24 * 3600:
+        succ, msg = auto_backup()
+        if succ:
+            st.success("⏰ 触发每日自动备份：" + msg)
+        else:
+            st.warning("⏰ 自动备份触发但是失败：" + msg)
 
 # 侧边栏全局参数
 with st.sidebar:
@@ -27,12 +75,18 @@ with st.sidebar:
     wise_fee_pct = st.number_input("Wise兑换费率(%)", value=0.0, min_value=0.0, max_value=10.0, step=0.1)/100
 
     st.divider()
-    st.warning("⚠️ 注意：免费云容器休眠/重启会清空内存台账！记得经常导出CSV备份！")
+    st.warning("⚠️ Streamlit免费容器休眠重启会清空内存台账！备份存在坚果云")
+    if st.button("💾 手动一键备份到坚果云"):
+        succ, msg = auto_backup()
+        if succ:
+            st.success(msg)
+        else:
+            st.error(msg)
     if st.button("🗑️ 清空全部台账（不可恢复）"):
         ledger.clear()
         st.rerun()
 
-st.title("📊 Gametrade 双人垫款利润台账｜共享内存版")
+st.title("📊 Gametrade 双人垫款利润台账｜共享内存版+网盘备份")
 
 # -------- 快速试算（放最前面） --------
 st.subheader("⚡ 快速试算（临时预览，不写入台账）")
@@ -62,8 +116,8 @@ if test_jpy>0:
 st.divider()
 
 # -------- CSV导入模块 --------
-st.subheader("📥 导入CSV备份恢复台账")
-upload_file = st.file_uploader("上传导出的 gt_profit_ledger.csv", type="csv")
+st.subheader("📥 导入CSV备份恢复台账（可以从坚果云下载备份文件上传恢复）")
+upload_file = st.file_uploader("上传 gt_backup_xxx.csv", type="csv")
 if upload_file is not None:
     import_df = pd.read_csv(upload_file, encoding="utf-8-sig")
     import_rows = import_df.to_dict("records")
@@ -162,11 +216,11 @@ if not df_all.empty:
         st.write(f"D当月垫款合计：{df_month['D垫款(元)'].sum():.2f} 元")
         st.write(f"💰 当月净利润合计：{df_month['净利润(元)'].sum():.2f} 元")
 
-    # 导出全部台账
+    # 导出下载
     output = BytesIO()
     df_all.to_csv(output, index=False, encoding="utf-8-sig")
     st.download_button(
-        label="💾 导出【全部台账】CSV备份",
+        label="💾 临时导出CSV（仅下载到本机）",
         data=output.getvalue(),
         file_name="gt_profit_ledger.csv",
         mime="text/csv"
