@@ -3,7 +3,7 @@ import json
 import pandas as pd
 from io import BytesIO
 
-st.set_page_config(page_title="Gametrade利润计算器", layout="wide")
+st.set_page_config(page_title="Gametrade利润计算器【含垫款&五五分成版】", layout="wide")
 
 def persist_all():
     data = {
@@ -57,7 +57,7 @@ with st.sidebar:
         st.rerun()
 
 # ========== 主页面 ==========
-st.title("📊 Gametrade 日元交易利润计算器【完整版｜可编辑+删除+筛选】")
+st.title("📊 Gametrade 日元交易利润计算器【垫款+五五分成完整版】")
 
 # -------- CSV导入模块 --------
 st.subheader("📥 导入CSV备份恢复台账")
@@ -81,35 +81,53 @@ st.divider()
 st.subheader("➕ 添加新订单")
 col1,col2,col3,col4 = st.columns(4)
 sell_jpy = col1.number_input("售出金额（日元）", min_value=0, step=100)
-cost_cny = col2.number_input("账号成本（人民币）", min_value=0.0, step=0.1)
+cost_taobao_cny = col2.number_input("淘宝采购成本(元)", min_value=0.0, step=0.1)
 game_name = col3.text_input("游戏名称", value="")
 note = col4.text_input("备注", value="")
 
+col5,col6,col7 = st.columns(3)
+backer = col5.text_input("垫款人", value="A")
+split_type = col6.selectbox("分成方式", ["五五分成", "独收"])
+
 if st.button("✅ 添加到台账") and sell_jpy>0:
+    # 基础手续费计算
     gt_fee_jpy = sell_jpy * gt_fee_pct
     after_gt = sell_jpy - gt_fee_jpy
     after_withdraw = after_gt - withdraw_fixed_jpy
     wise_fee_jpy = after_withdraw * wise_fee_pct
     final_jpy = after_withdraw - wise_fee_jpy
     final_cny = final_jpy * exchange_rate
-    profit_cny = final_cny - cost_cny
-    if cost_cny > 0:
-        rate = profit_cny / cost_cny
-        rate_str = f"{rate*100:.1f}%"
+
+    profit_total = final_cny - cost_taobao_cny
+    if profit_total > 0:
+        rate = profit_total / cost_taobao_cny if cost_taobao_cny>0 else None
+        rate_str = f"{rate*100:.1f}%" if rate is not None else "无成本"
     else:
-        rate_str = "无成本"
+        rate_str = f"{profit_total:.2f}元"
+
+    # 分账计算
+    if split_type == "五五分成":
+        backer_get = profit_total / 2
+        seller_get = profit_total / 2
+    else:
+        backer_get = 0
+        seller_get = profit_total
 
     row = {
         "游戏": game_name,
         "备注": note,
+        "垫款人": backer,
+        "分成方式": split_type,
         "售价日元": sell_jpy,
+        "淘宝采购成本(元)": cost_taobao_cny,
         "GT手续费日元": round(gt_fee_jpy,2),
         "提现后日元": round(after_withdraw,2),
         "Wise手续费日元": round(wise_fee_jpy,2),
         "到手日元": round(final_jpy,2),
         "到手人民币": round(final_cny,2),
-        "成本CNY": cost_cny,
-        "净利润CNY": round(profit_cny,2),
+        "总利润(元)": round(profit_total,2),
+        "垫款人分得(元)": round(backer_get,2),
+        "卖家分得(元)": round(seller_get,2),
         "毛利率": rate_str
     }
     st.session_state["ledger"].append(row)
@@ -139,15 +157,19 @@ if ledger:
     # 筛选后汇总统计
     sum_sell = df_filter["售价日元"].sum()
     sum_final_cny = df_filter["到手人民币"].sum()
-    sum_cost = df_filter["成本CNY"].sum()
-    sum_profit = df_filter["净利润CNY"].sum()
+    sum_taobao_cost = df_filter["淘宝采购成本(元)"].sum()
+    sum_total_profit = df_filter["总利润(元)"].sum()
+    sum_backer = df_filter["垫款人分得(元)"].sum()
+    sum_seller = df_filter["卖家分得(元)"].sum()
     st.markdown(f"""
     ### 📈 当前筛选结果汇总
     - 订单数量：{len(df_filter)} 条
     - 总售出日元：**{sum_sell:,.0f} JPY**
-    - 总到手人民币：**{sum_final_cny:,.2f} CNY**
-    - 总成本：**{sum_cost:,.2f} CNY**
-    - 总净利润：**{sum_profit:,.2f} CNY**
+    - 总到手人民币：**{sum_final_cny:,.2f} 元**
+    - 总淘宝采购成本：**{sum_taobao_cost:,.2f} 元**
+    - 总利润：**{sum_total_profit:,.2f} 元**
+    - 垫款人合计分得：**{sum_backer:,.2f} 元**
+    - 卖家合计分得：**{sum_seller:,.2f} 元**
     """)
 
     # 导出全部台账
@@ -170,33 +192,48 @@ if ledger:
     with tab_edit:
         e_game = st.text_input("游戏名称", value=target_row["游戏"])
         e_note = st.text_input("备注", value=target_row["备注"])
+        e_backer = st.text_input("垫款人", value=target_row["垫款人"])
+        e_split = st.selectbox("分成方式", ["五五分成", "独收"], index=["五五分成", "独收"].index(target_row["分成方式"]))
         e_sell = st.number_input("售出金额（日元）", value=int(target_row["售价日元"]), min_value=0, step=100)
-        e_cost = st.number_input("账号成本（人民币）", value=float(target_row["成本CNY"]), min_value=0.0, step=0.1)
+        e_cost = st.number_input("淘宝采购成本(元)", value=float(target_row["淘宝采购成本(元)"]), min_value=0.0, step=0.1)
+
         if st.button("✅ 保存修改"):
-            # 重新计算
             gt_fee_jpy = e_sell * gt_fee_pct
             after_gt = e_sell - gt_fee_jpy
             after_withdraw = after_gt - withdraw_fixed_jpy
             wise_fee_jpy = after_withdraw * wise_fee_pct
             final_jpy = after_withdraw - wise_fee_jpy
             final_cny = final_jpy * exchange_rate
-            profit_cny = final_cny - e_cost
-            if e_cost > 0:
-                rate = profit_cny / e_cost
-                rate_str = f"{rate*100:.1f}%"
+            profit_total = final_cny - e_cost
+
+            if profit_total > 0:
+                rate = profit_total / e_cost if e_cost>0 else None
+                rate_str = f"{rate*100:.1f}%" if rate is not None else "无成本"
             else:
-                rate_str = "无成本"
+                rate_str = f"{profit_total:.2f}元"
+
+            if e_split == "五五分成":
+                backer_get = profit_total / 2
+                seller_get = profit_total / 2
+            else:
+                backer_get = 0
+                seller_get = profit_total
+
             new_row = {
                 "游戏": e_game,
                 "备注": e_note,
+                "垫款人": e_backer,
+                "分成方式": e_split,
                 "售价日元": e_sell,
+                "淘宝采购成本(元)": e_cost,
                 "GT手续费日元": round(gt_fee_jpy,2),
                 "提现后日元": round(after_withdraw,2),
                 "Wise手续费日元": round(wise_fee_jpy,2),
                 "到手日元": round(final_jpy,2),
                 "到手人民币": round(final_cny,2),
-                "成本CNY": e_cost,
-                "净利润CNY": round(profit_cny,2),
+                "总利润(元)": round(profit_total,2),
+                "垫款人分得(元)": round(backer_get,2),
+                "卖家分得(元)": round(seller_get,2),
                 "毛利率": rate_str
             }
             st.session_state["ledger"][real_idx] = new_row
@@ -215,10 +252,14 @@ if ledger:
 else:
     st.info("暂无交易记录，添加订单或者上传CSV备份")
 
-# -------- 快速试算 --------
+# -------- 快速试算【现在加上淘宝采购成本，支持分成预览】 --------
 st.divider()
 st.subheader("⚡ 快速试算（临时，不存入台账）")
-test_jpy = st.number_input("试算：售价日元", min_value=0, step=100, key="test")
+t1, t2, t3 = st.columns(3)
+test_jpy = t1.number_input("试算：售价日元", min_value=0, step=100, key="test_jpy")
+test_cost = t2.number_input("试算：淘宝采购成本(元)", min_value=0.0, step=0.1, key="test_cost")
+test_split = t3.selectbox("试算分成模式", ["五五分成", "独收"], key="test_split")
+
 if test_jpy>0:
     gt_fee_jpy = test_jpy * gt_fee_pct
     after_gt = test_jpy - gt_fee_jpy
@@ -226,11 +267,23 @@ if test_jpy>0:
     wise_fee_jpy = after_withdraw * wise_fee_pct
     final_jpy = after_withdraw - wise_fee_jpy
     final_cny = final_jpy * exchange_rate
+    profit_total = final_cny - test_cost
+
+    if test_split == "五五分成":
+        backer_get = profit_total / 2
+        seller_get = profit_total / 2
+    else:
+        backer_get = 0
+        seller_get = profit_total
+
     st.write(f"""
     - GT手续费：{gt_fee_jpy:.0f} JPY
-    - 扣提现费后：{after_withdraw:.0f} JPY
+    - 扣固定提现费后：{after_withdraw:.0f} JPY
     - Wise手续费：{wise_fee_jpy:.0f} JPY
     - 最终到手日元：{final_jpy:.0f} JPY
-    - 折合人民币：**{final_cny:.2f} CNY**
+    - 折合到手人民币：**{final_cny:.2f} 元**
+    - 淘宝成本：{test_cost:.2f} 元
+    - 【总利润】：{profit_total:.2f} 元
+    - 垫款人分得：{backer_get:.2f} 元
+    - 卖家分得：{seller_get:.2f} 元
     """)
-
