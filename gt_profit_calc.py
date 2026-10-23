@@ -6,7 +6,7 @@ from webdav3.client import Client
 
 st.set_page_config(page_title="Gametrade双人台账｜内存共享+自动备份版", layout="wide")
 
-# 北京时间
+# 获取北京时间 UTC+8
 def get_beijing_now():
     utc_now = datetime.utcnow()
     bj_now = utc_now + timedelta(hours=8)
@@ -22,14 +22,13 @@ def get_webdav_client():
     }
     return Client(options)
 
-# 全局共享台账（核心，双人同链接共享内存）
+# 全局共享台账（双人共用同一份内存数据）
 @st.cache_resource
 def get_shared_ledger():
     return []
 
 @st.cache_resource
 def get_backup_time_record():
-    # 记录上次自动备份的北京时间
     return {"last_backup": None}
 
 ledger = get_shared_ledger()
@@ -53,11 +52,9 @@ def auto_backup():
     except Exception as e:
         return False, f"备份失败：{str(e)}"
 
-# 页面加载时判断是否需要自动备份
+# 页面加载自动判断备份间隔
 bj_now = get_beijing_now()
-if backup_record["last_backup"] is None:
-    pass
-else:
+if backup_record["last_backup"] is not None:
     diff = bj_now - backup_record["last_backup"]
     if diff.total_seconds() >= 24 * 3600:
         succ, msg = auto_backup()
@@ -75,7 +72,7 @@ with st.sidebar:
     wise_fee_pct = st.number_input("Wise兑换费率(%)", value=0.0, min_value=0.0, max_value=10.0, step=0.1)/100
 
     st.divider()
-    st.warning("⚠️ Streamlit免费容器休眠重启会清空内存台账！备份存在坚果云")
+    st.warning("⚠️ Streamlit免费容器休眠重启会清空内存台账！请定期备份到坚果云")
     if st.button("💾 手动一键备份到坚果云"):
         succ, msg = auto_backup()
         if succ:
@@ -86,13 +83,13 @@ with st.sidebar:
         ledger.clear()
         st.rerun()
 
-st.title("📊 Gametrade 双人垫款利润台账｜共享内存版+网盘备份")
+st.title("📊 Gametrade 出单利润台账｜共享内存版")
 
 # -------- 快速试算（放最前面） --------
 st.subheader("⚡ 快速试算（临时预览，不写入台账）")
 t1, t2 = st.columns(2)
 test_jpy = t1.number_input("试算：售价日元", min_value=0, step=100, key="test_jpy")
-test_taobao_cost = t2.number_input("试算：淘宝总成本(元)", min_value=0.0, step=0.1, key="test_taobao")
+test_taobao_cost = t2.number_input("试算：淘宝进货价(元)", min_value=0.0, step=0.1, key="test_taobao")
 
 if test_jpy>0:
     gt_fee_jpy = test_jpy * gt_fee_pct
@@ -105,38 +102,21 @@ if test_jpy>0:
 
     st.write(f"""
     - GT手续费：{gt_fee_jpy:.0f} JPY
-    - 扣固定提现费后：{after_withdraw:.0f} JPY
+    - 扣平台费后到手日元：{after_withdraw:.0f} JPY
     - Wise手续费：{wise_fee_jpy:.0f} JPY
-    - 最终到手日元：{final_jpy:.0f} JPY
     - 折合到手人民币：**{final_cny:.2f} 元**
-    - 淘宝总成本：{test_taobao_cost:.2f} 元
-    - 【净利润】：{net_test_profit:.2f} 元
+    - 淘宝进货成本：{test_taobao_cost:.2f} 元
+    - 【单笔净利润】：{net_test_profit:.2f} 元
     """)
 
 st.divider()
 
-# -------- CSV导入模块 --------
-st.subheader("📥 导入CSV备份恢复台账（可以从坚果云下载备份文件上传恢复）")
-upload_file = st.file_uploader("上传 gt_backup_xxx.csv", type="csv")
-if upload_file is not None:
-    import_df = pd.read_csv(upload_file, encoding="utf-8-sig")
-    import_rows = import_df.to_dict("records")
-    mode = st.radio("导入模式", ["追加到现有台账", "覆盖当前全部台账"], horizontal=True)
-    if st.button("✅ 确认导入"):
-        if mode == "覆盖当前全部台账":
-            ledger.clear()
-        ledger.extend(import_rows)
-        st.success(f"✅ 导入成功，共 {len(import_rows)} 条订单")
-        st.rerun()
-
-st.divider()
-
-# -------- 新增订单（上下垂直排列W/D垫款，自动北京时间） --------
+# -------- 新增订单区域（修改为：淘宝进货价 + 垫款人） --------
 st.subheader("➕ 添加新订单（自动记录北京时间）")
 sell_jpy = st.number_input("售出金额（日元）", min_value=0, step=100, key="add_sell")
 game_name = st.text_input("游戏名称", value="", key="add_game")
-w_cost = st.number_input("W垫款(元)", min_value=0.0, step=0.1, key="add_w")
-d_cost = st.number_input("D垫款(元)", min_value=0.0, step=0.1, key="add_d")
+buy_cost = st.number_input("淘宝进货价（元）", min_value=0.0, step=0.1, key="add_buycost")
+payer = st.text_input("垫款人", value="", key="add_payer")
 note = st.text_input("备注", value="", key="add_note")
 
 if st.button("✅ 添加订单到台账") and sell_jpy>0:
@@ -148,30 +128,23 @@ if st.button("✅ 添加订单到台账") and sell_jpy>0:
     final_jpy = after_withdraw - wise_fee_jpy
     final_cny = final_jpy * exchange_rate
 
-    total_cost = w_cost + d_cost
-    net_profit = final_cny - total_cost
-    w_get = w_cost + net_profit / 2
-    d_get = d_cost + net_profit / 2
+    net_profit = final_cny - buy_cost
 
     new_row = {
         "交易时间": bj_time_str,
         "游戏": game_name,
+        "垫款人": payer,
         "备注": note,
         "售价日元": sell_jpy,
-        "W垫款(元)": w_cost,
-        "D垫款(元)": d_cost,
+        "淘宝进货价(元)": buy_cost,
         "GT手续费日元": round(gt_fee_jpy,2),
         "提现后日元": round(after_withdraw,2),
         "Wise手续费日元": round(wise_fee_jpy,2),
-        "到手日元": round(final_jpy,2),
         "到手人民币": round(final_cny,2),
-        "总垫款(元)": round(total_cost,2),
-        "净利润(元)": round(net_profit,2),
-        "W总共分得(元)": round(w_get,2),
-        "D总共分得(元)": round(d_get,2)
+        "单笔净利润(元)": round(net_profit,2)
     }
     ledger.append(new_row)
-    st.success(f"✅ 订单新增成功！北京时间：{bj_time_str}")
+    st.success(f"✅ 订单新增成功！北京时间：{bj_time_str}，净利润：{net_profit:.2f} 元")
     st.rerun()
 
 # -------- 台账展示、筛选、统计 --------
@@ -204,23 +177,21 @@ if not df_all.empty:
     with col_today:
         st.markdown("### 📅 今日统计")
         st.write(f"今日成交单数：{len(df_today)} 单")
-        st.write(f"今日到手人民币：{df_today['到手人民币'].sum():.2f} 元")
-        st.write(f"W今日垫款合计：{df_today['W垫款(元)'].sum():.2f} 元")
-        st.write(f"D今日垫款合计：{df_today['D垫款(元)'].sum():.2f} 元")
-        st.write(f"💰 今日净利润合计：{df_today['净利润(元)'].sum():.2f} 元")
+        st.write(f"今日总到手人民币：{df_today['到手人民币'].sum():.2f} 元")
+        st.write(f"今日总进货成本：{df_today['淘宝进货价(元)'].sum():.2f} 元")
+        st.write(f"💰 今日净利润合计：{df_today['单笔净利润(元)'].sum():.2f} 元")
     with col_month:
         st.markdown("### 🗓️ 当月统计")
         st.write(f"当月成交单数：{len(df_month)} 单")
-        st.write(f"当月到手人民币：{df_month['到手人民币'].sum():.2f} 元")
-        st.write(f"W当月垫款合计：{df_month['W垫款(元)'].sum():.2f} 元")
-        st.write(f"D当月垫款合计：{df_month['D垫款(元)'].sum():.2f} 元")
-        st.write(f"💰 当月净利润合计：{df_month['净利润(元)'].sum():.2f} 元")
+        st.write(f"当月总到手人民币：{df_month['到手人民币'].sum():.2f} 元")
+        st.write(f"当月总进货成本：{df_month['淘宝进货价(元)'].sum():.2f} 元")
+        st.write(f"💰 当月净利润合计：{df_month['单笔净利润(元)'].sum():.2f} 元")
 
     # 导出下载
     output = BytesIO()
     df_all.to_csv(output, index=False, encoding="utf-8-sig")
     st.download_button(
-        label="💾 临时导出CSV（仅下载到本机）",
+        label="💾 临时导出CSV（下载到本机）",
         data=output.getvalue(),
         file_name="gt_profit_ledger.csv",
         mime="text/csv"
@@ -235,10 +206,10 @@ if not df_all.empty:
     tab_edit, tab_del = st.tabs(["✏️ 编辑这条记录", "🗑️ 删除这条记录"])
     with tab_edit:
         e_game = st.text_input("游戏名称", value=target_row["游戏"], key="e_game")
+        e_payer = st.text_input("垫款人", value=target_row["垫款人"], key="e_payer")
         e_note = st.text_input("备注", value=target_row["备注"], key="e_note")
         e_sell = st.number_input("售出金额（日元）", value=int(target_row["售价日元"]), min_value=0, step=100, key="e_sell")
-        e_w_cost = st.number_input("W垫款(元)", value=float(target_row["W垫款(元)"]), min_value=0.0, step=0.1, key="e_w")
-        e_d_cost = st.number_input("D垫款(元)", value=float(target_row["D垫款(元)"]), min_value=0.0, step=0.1, key="e_d")
+        e_buycost = st.number_input("淘宝进货价（元）", value=float(target_row["淘宝进货价(元)"]), min_value=0.0, step=0.1, key="e_buycost")
         e_date = st.text_input("交易时间(YYYY-MM-DD HH:MM:SS)", value=target_row["交易时间"], key="e_date")
 
         if st.button("✅ 保存修改", key="save_edit_btn"):
@@ -248,27 +219,20 @@ if not df_all.empty:
             wise_fee_jpy = after_withdraw * wise_fee_pct
             final_jpy = after_withdraw - wise_fee_jpy
             final_cny = final_jpy * exchange_rate
-            total_cost = e_w_cost + e_d_cost
-            net_profit = final_cny - total_cost
-            w_get = e_w_cost + net_profit / 2
-            d_get = e_d_cost + net_profit / 2
+            net_profit = final_cny - e_buycost
 
             ledger[real_idx] = {
                 "交易时间": e_date,
                 "游戏": e_game,
+                "垫款人": e_payer,
                 "备注": e_note,
                 "售价日元": e_sell,
-                "W垫款(元)": e_w_cost,
-                "D垫款(元)": e_d_cost,
+                "淘宝进货价(元)": e_buycost,
                 "GT手续费日元": round(gt_fee_jpy,2),
                 "提现后日元": round(after_withdraw,2),
                 "Wise手续费日元": round(wise_fee_jpy,2),
-                "到手日元": round(final_jpy,2),
                 "到手人民币": round(final_cny,2),
-                "总垫款(元)": round(total_cost,2),
-                "净利润(元)": round(net_profit,2),
-                "W总共分得(元)": round(w_get,2),
-                "D总共分得(元)": round(d_get,2)
+                "单笔净利润(元)": round(net_profit,2)
             }
             st.success(f"✅ 序号 {edit_del_idx} 修改完成！")
             st.rerun()
@@ -280,4 +244,19 @@ if not df_all.empty:
             st.success(f"✅ 序号 {edit_del_idx} 已删除！")
             st.rerun()
 else:
-    st.info("暂无交易记录，添加订单或者上传CSV备份")
+    st.info("暂无交易记录，请添加订单")
+
+# -------- CSV导入恢复模块，放到页面最底部 --------
+st.divider()
+st.subheader("📥 导入CSV备份恢复台账（较少使用）")
+upload_file = st.file_uploader("上传备份CSV文件恢复数据", type="csv")
+if upload_file is not None:
+    import_df = pd.read_csv(upload_file, encoding="utf-8-sig")
+    import_rows = import_df.to_dict("records")
+    mode = st.radio("导入模式", ["追加到现有台账", "覆盖当前全部台账"], horizontal=True)
+    if st.button("✅ 确认导入"):
+        if mode == "覆盖当前全部台账":
+            ledger.clear()
+        ledger.extend(import_rows)
+        st.success(f"✅ 导入成功，共 {len(import_rows)} 条订单")
+        st.rerun()
