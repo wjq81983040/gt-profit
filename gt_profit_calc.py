@@ -31,13 +31,13 @@ if(raw){
 
 if "init_flag" not in st.session_state:
     st.session_state.init_flag = True
-    st.session_state["exchange_rate"] = 0.041
-    st.session_state["gt_fee_pct"] = 0.10
-    st.session_state["withdraw_fixed_jpy"] = 220
-    st.session_state["wise_fee_pct"] = 0.012
+    st.session_state["exchange_rate"] = 0.040
+    st.session_state["gt_fee_pct"] = 0.088
+    st.session_state["withdraw_fixed_jpy"] = 0
+    st.session_state["wise_fee_pct"] = 0.00
     st.session_state["ledger"] = []
 
-# ========== 侧边栏：全局费率设置 ==========
+# ========== 侧边栏：全局参数 ==========
 with st.sidebar:
     st.header("⚙️ 全局参数（自动保存）")
     exchange_rate = st.number_input("汇率 日元→人民币", value=st.session_state["exchange_rate"], min_value=0.001, max_value=0.2, step=0.0001, format="%.4f")
@@ -60,6 +60,34 @@ with st.sidebar:
 # ========== 主页面 ==========
 st.title("📊 Gametrade 双人垫款利润计算器｜剩余利润平分")
 
+# 调换位置：先快速试算，再导入CSV
+# -------- 快速试算（只需要淘宝售价） --------
+st.subheader("⚡ 快速试算（临时预览，不进台账）")
+t1, t2 = st.columns(2)
+test_jpy = t1.number_input("试算：售价日元", min_value=0, step=100, key="test_jpy")
+test_taobao_cost = t2.number_input("试算：淘宝成本(元)", min_value=0.0, step=0.1, key="test_taobao")
+
+if test_jpy>0:
+    gt_fee_jpy = test_jpy * gt_fee_pct
+    after_gt = test_jpy - gt_fee_jpy
+    after_withdraw = after_gt - withdraw_fixed_jpy
+    wise_fee_jpy = after_withdraw * wise_fee_pct
+    final_jpy = after_withdraw - wise_fee_jpy
+    final_cny = final_jpy * exchange_rate
+    net_test_profit = final_cny - test_taobao_cost
+
+    st.write(f"""
+    - GT手续费：{gt_fee_jpy:.0f} JPY
+    - 扣固定提现费后：{after_withdraw:.0f} JPY
+    - Wise手续费：{wise_fee_jpy:.0f} JPY
+    - 最终到手日元：{final_jpy:.0f} JPY
+    - 折合到手人民币：**{final_cny:.2f} 元**
+    - 淘宝总成本：{test_taobao_cost:.2f} 元
+    - 【净利润】：{net_test_profit:.2f} 元
+    """)
+
+st.divider()
+
 # -------- CSV导入模块 --------
 st.subheader("📥 导入CSV备份恢复台账")
 upload_file = st.file_uploader("上传导出的 gt_profit_ledger.csv", type="csv")
@@ -78,16 +106,13 @@ if upload_file is not None:
 
 st.divider()
 
-# -------- 新增订单 --------
+# -------- 新增订单 【上下排列：W垫款、D垫款】 --------
 st.subheader("➕ 添加新订单")
-col1,col2,col3,col4 = st.columns(4)
-sell_jpy = col1.number_input("售出金额（日元）", min_value=0, step=100, key="add_sell")
-cost_me = col2.number_input("✅ 我垫款(元)", min_value=0.0, step=0.1, key="add_me")
-cost_friend = col3.number_input("🤝 朋友垫款(元)", min_value=0.0, step=0.1, key="add_friend")
-game_name = col4.text_input("游戏名称", value="", key="add_game")
-
-col5, = st.columns(1)
-note = col5.text_input("备注", value="", key="add_note")
+sell_jpy = st.number_input("售出金额（日元）", min_value=0, step=100, key="add_sell")
+game_name = st.text_input("游戏名称", value="", key="add_game")
+w_cost = st.number_input("W垫款(元)", min_value=0.0, step=0.1, key="add_w")
+d_cost = st.number_input("D垫款(元)", min_value=0.0, step=0.1, key="add_d")
+note = st.text_input("备注", value="", key="add_note")
 
 if st.button("✅ 添加到台账") and sell_jpy>0:
     # 手续费计算
@@ -98,18 +123,18 @@ if st.button("✅ 添加到台账") and sell_jpy>0:
     final_jpy = after_withdraw - wise_fee_jpy
     final_cny = final_jpy * exchange_rate
 
-    total_cost = cost_me + cost_friend
+    total_cost = w_cost + d_cost
     net_profit = final_cny - total_cost
-    my_get = cost_me + net_profit / 2
-    friend_get = cost_friend + net_profit / 2
+    w_get = w_cost + net_profit / 2
+    d_get = d_cost + net_profit / 2
 
     row = {
         "交易日期": date.today().isoformat(),
         "游戏": game_name,
         "备注": note,
         "售价日元": sell_jpy,
-        "我垫款(元)": cost_me,
-        "朋友垫款(元)": cost_friend,
+        "W垫款(元)": w_cost,
+        "D垫款(元)": d_cost,
         "GT手续费日元": round(gt_fee_jpy,2),
         "提现后日元": round(after_withdraw,2),
         "Wise手续费日元": round(wise_fee_jpy,2),
@@ -117,8 +142,8 @@ if st.button("✅ 添加到台账") and sell_jpy>0:
         "到手人民币": round(final_cny,2),
         "总垫款(元)": round(total_cost,2),
         "净利润(元)": round(net_profit,2),
-        "我总共分得(元)": round(my_get,2),
-        "朋友总共分得(元)": round(friend_get,2)
+        "W总共分得(元)": round(w_get,2),
+        "D总共分得(元)": round(d_get,2)
     }
     st.session_state["ledger"].append(row)
     persist_all()
@@ -149,7 +174,7 @@ if ledger:
 
     st.dataframe(df_filter, use_container_width=True, hide_index=True)
 
-    # ========= 【新增：每日、当月统计面板】 =========
+    # ========= 【每日、当月统计面板】 =========
     st.divider()
     st.subheader("📈 收益汇总统计")
     df_today = df_all[df_all["交易日期"] == today_str]
@@ -160,16 +185,16 @@ if ledger:
         st.markdown("### 📅 今日统计")
         st.write(f"今日成交单数：{len(df_today)} 单")
         st.write(f"今日到手人民币：{df_today['到手人民币'].sum():.2f} 元")
-        st.write(f"✅ 我今日垫款合计：{df_today['我垫款(元)'].sum():.2f} 元")
-        st.write(f"🤝 朋友今日垫款合计：{df_today['朋友垫款(元)'].sum():.2f} 元")
+        st.write(f"W今日垫款合计：{df_today['W垫款(元)'].sum():.2f} 元")
+        st.write(f"D今日垫款合计：{df_today['D垫款(元)'].sum():.2f} 元")
         st.write(f"💰 今日净利润合计：{df_today['净利润(元)'].sum():.2f} 元")
 
     with col_month:
         st.markdown("### 🗓️ 当月统计")
         st.write(f"当月成交单数：{len(df_month)} 单")
         st.write(f"当月到手人民币：{df_month['到手人民币'].sum():.2f} 元")
-        st.write(f"✅ 我当月垫款合计：{df_month['我垫款(元)'].sum():.2f} 元")
-        st.write(f"🤝 朋友当月垫款合计：{df_month['朋友垫款(元)'].sum():.2f} 元")
+        st.write(f"W当月垫款合计：{df_month['W垫款(元)'].sum():.2f} 元")
+        st.write(f"D当月垫款合计：{df_month['D垫款(元)'].sum():.2f} 元")
         st.write(f"💰 当月净利润合计：{df_month['净利润(元)'].sum():.2f} 元")
 
     # 导出全部台账
@@ -193,8 +218,8 @@ if ledger:
         e_game = st.text_input("游戏名称", value=target_row["游戏"], key="e_game")
         e_note = st.text_input("备注", value=target_row["备注"], key="e_note")
         e_sell = st.number_input("售出金额（日元）", value=int(target_row["售价日元"]), min_value=0, step=100, key="e_sell")
-        e_me_cost = st.number_input("✅ 我垫款(元)", value=float(target_row["我垫款(元)"]), min_value=0.0, step=0.1, key="e_me")
-        e_friend_cost = st.number_input("🤝 朋友垫款(元)", value=float(target_row["朋友垫款(元)"]), min_value=0.0, step=0.1, key="e_friend")
+        e_w_cost = st.number_input("W垫款(元)", value=float(target_row["W垫款(元)"]), min_value=0.0, step=0.1, key="e_w")
+        e_d_cost = st.number_input("D垫款(元)", value=float(target_row["D垫款(元)"]), min_value=0.0, step=0.1, key="e_d")
         e_date = st.text_input("交易日期(YYYY-MM-DD)", value=target_row["交易日期"], key="e_date")
 
         if st.button("✅ 保存修改", key="save_edit_btn"):
@@ -204,18 +229,18 @@ if ledger:
             wise_fee_jpy = after_withdraw * wise_fee_pct
             final_jpy = after_withdraw - wise_fee_jpy
             final_cny = final_jpy * exchange_rate
-            total_cost = e_me_cost + e_friend_cost
+            total_cost = e_w_cost + e_d_cost
             net_profit = final_cny - total_cost
-            my_get = e_me_cost + net_profit / 2
-            friend_get = e_friend_cost + net_profit / 2
+            w_get = e_w_cost + net_profit / 2
+            d_get = e_d_cost + net_profit / 2
 
             new_row = {
                 "交易日期": e_date,
                 "游戏": e_game,
                 "备注": e_note,
                 "售价日元": e_sell,
-                "我垫款(元)": e_me_cost,
-                "朋友垫款(元)": e_friend_cost,
+                "W垫款(元)": e_w_cost,
+                "D垫款(元)": e_d_cost,
                 "GT手续费日元": round(gt_fee_jpy,2),
                 "提现后日元": round(after_withdraw,2),
                 "Wise手续费日元": round(wise_fee_jpy,2),
@@ -223,8 +248,8 @@ if ledger:
                 "到手人民币": round(final_cny,2),
                 "总垫款(元)": round(total_cost,2),
                 "净利润(元)": round(net_profit,2),
-                "我总共分得(元)": round(my_get,2),
-                "朋友总共分得(元)": round(friend_get,2)
+                "W总共分得(元)": round(w_get,2),
+                "D总共分得(元)": round(d_get,2)
             }
             st.session_state["ledger"][real_idx] = new_row
             persist_all()
@@ -241,35 +266,3 @@ if ledger:
 
 else:
     st.info("暂无交易记录，添加订单或者上传CSV备份")
-
-# -------- 快速试算（临时，不存入台账） --------
-st.divider()
-st.subheader("⚡ 快速试算（临时预览，不进台账）")
-t1, t2, t3 = st.columns(3)
-test_jpy = t1.number_input("试算：售价日元", min_value=0, step=100, key="test_jpy")
-test_me = t2.number_input("试算：我垫款(元)", min_value=0.0, step=0.1, key="test_me")
-test_friend = t3.number_input("试算：朋友垫款(元)", min_value=0.0, step=0.1, key="test_friend")
-
-if test_jpy>0:
-    gt_fee_jpy = test_jpy * gt_fee_pct
-    after_gt = test_jpy - gt_fee_jpy
-    after_withdraw = after_gt - withdraw_fixed_jpy
-    wise_fee_jpy = after_withdraw * wise_fee_pct
-    final_jpy = after_withdraw - wise_fee_jpy
-    final_cny = final_jpy * exchange_rate
-    total_test_cost = test_me + test_friend
-    net_test_profit = final_cny - total_test_cost
-    my_total = test_me + net_test_profit / 2
-    friend_total = test_friend + net_test_profit / 2
-
-    st.write(f"""
-    - GT手续费：{gt_fee_jpy:.0f} JPY
-    - 扣固定提现费后：{after_withdraw:.0f} JPY
-    - Wise手续费：{wise_fee_jpy:.0f} JPY
-    - 最终到手日元：{final_jpy:.0f} JPY
-    - 折合到手人民币：**{final_cny:.2f} 元**
-    - 总垫款：{total_test_cost:.2f} 元
-    - 【净利润】：{net_test_profit:.2f} 元（剩余利润对半平分）
-    - ✅ 你一共拿到（本金+一半利润）：{my_total:.2f} 元
-    - 🤝 朋友一共拿到（本金+一半利润）：{friend_total:.2f} 元
-    """)
