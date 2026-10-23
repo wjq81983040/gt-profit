@@ -111,7 +111,7 @@ if test_jpy>0:
 
 st.divider()
 
-# -------- 新增订单区域（修改为：淘宝进货价 + 垫款人） --------
+# -------- 新增订单区域（淘宝进货价 + 垫款人） --------
 st.subheader("➕ 添加新订单（自动记录北京时间）")
 sell_jpy = st.number_input("售出金额（日元）", min_value=0, step=100, key="add_sell")
 game_name = st.text_input("游戏名称", value="", key="add_game")
@@ -186,6 +186,25 @@ if not df_all.empty:
         st.write(f"当月总到手人民币：{df_month['到手人民币'].sum():.2f} 元")
         st.write(f"当月总进货成本：{df_month['淘宝进货价(元)'].sum():.2f} 元")
         st.write(f"💰 当月净利润合计：{df_month['单笔净利润(元)'].sum():.2f} 元")
+
+    # ========= 垫款人汇总 + 分润结算 =========
+    st.divider()
+    st.subheader("👤 垫款人汇总 & 利润分润结算")
+    profit_ratio = st.number_input("利润分润比例（垫款人分成）", value=0.5, min_value=0.0, max_value=1.0, step=0.05, help="0.5=对半分；1=利润全部归垫款人；0=垫款人不分利润")
+
+    payer_group = df_all.groupby("垫款人").agg(
+        订单数量=("垫款人", "count"),
+        总垫款金额=("淘宝进货价(元)", "sum"),
+        对应总到手人民币=("到手人民币", "sum"),
+        对应总净利润=("单笔净利润(元)", "sum")
+    ).reset_index()
+    # 计算垫款人应得分润
+    payer_group["垫款人应得分润"] = payer_group["对应总净利润"] * profit_ratio
+    payer_group["垫款人应得分润"] = payer_group["垫款人应得分润"].round(2)
+    st.dataframe(payer_group, use_container_width=True, hide_index=True)
+
+    # 简单文字总结
+    st.info("💡 结算说明：垫款人应得分润 = 该垫款人名下订单总净利润 × 分润比例；垫款本金需要另外归还垫款人")
 
     # 导出下载
     output = BytesIO()
